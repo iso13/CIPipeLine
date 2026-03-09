@@ -1,20 +1,23 @@
-# CI Pipeline Documentation
+# FeatureForgeAI — CI Pipeline
 
-**Stack:** Azure DevOps · ESLint · TypeScript · Jest · Cucumber · Playwright · Node.js 20
+**Stack:** Azure DevOps · TypeScript · Node.js 20 · Vitest · ESLint · PostgreSQL
 
 ---
 
 ## Overview
 
-This pipeline enforces code quality on every pull request and every push to `main`, then runs the full E2E suite on a weekday schedule. No code reaches `main` without passing all three automated checks and a human review.
+FeatureForgeAI is an AI-powered BDD feature generation platform that transforms user stories into structured Cucumber features and scenarios using OpenAI and domain-specific knowledge.
+
+This pipeline enforces code quality on every pull request and every push to `main`, then runs the full integration suite on a weekday schedule. No code reaches `main` without passing all automated checks and a human review.
 
 | | |
 |---|---|
 | **CI tool** | Azure DevOps Pipelines |
-| **Linter** | ESLint with `@typescript-eslint` |
-| **Type check** | `tsc --noEmit` |
-| **Unit tests** | Jest with Cobertura coverage (80% threshold) |
-| **E2E tests** | Cucumber + Playwright (Chromium) |
+| **Linter** | ESLint |
+| **Type check** | `tsc --noEmit` (`npm run check`) |
+| **Unit tests** | Vitest — `tests/utils/` + `tests/server/` |
+| **Integration tests** | Vitest — `tests/integration/` against real PostgreSQL |
+| **Security** | `scripts/security-check.mjs` |
 | **Branch protected** | `main` |
 | **Merge strategy** | Squash merge only |
 
@@ -22,25 +25,26 @@ This pipeline enforces code quality on every pull request and every push to `mai
 
 ## Pipeline Structure
 
-The pipeline is split into two stages that run under different conditions.
-
 ### Stage 1 — Code Quality
 
-Runs on every PR and every direct push to `main`. All three jobs run in parallel.
+Runs on every PR and every push to `main`. All four jobs run in parallel.
 
-| Job | What it does |
-|---|---|
-| **ESLint** | Lints `src/` and `features/` — fails on any error |
-| **TypeScript Type Check** | Runs `tsc --noEmit` — fails on any type error |
-| **Unit Tests (Jest)** | Runs unit tests, enforces 80% coverage, publishes JUnit + Cobertura results to ADO |
+| Job | Command | What it checks |
+|---|---|---|
+| **ESLint** | `npm run lint` | Code style and quality across client/ and server/ |
+| **TypeScript Type Check** | `npm run check` | Type correctness across shared/, client/, server/ |
+| **Unit Tests** | `npm run test:coverage` | Business logic — feature generation, storage, auth, permissions |
+| **Security Check** | `npm run security-check` | Dependency vulnerabilities and insecure patterns |
 
-### Stage 2 — E2E Tests
+> `FEATUREGEN_FAKE_AI=1` is set in CI so unit tests never make real OpenAI API calls — keeps tests fast, free, and reliable.
 
-Runs on the weekday morning schedule and on manual triggers. Skipped on PR builds to keep feedback fast. Depends on Stage 1 passing (or being skipped on schedule runs).
+### Stage 2 — Integration Tests
 
-| Job | What it does |
-|---|---|
-| **FeatureForgeAI** | Runs Cucumber + Playwright against the target environment, generates and deploys the HTML report to `automation.fmne.com` |
+Runs on the weekday morning schedule and post-merge pushes to `main`. Skipped on PR builds. Requires a live `DATABASE_URL` from the variable group.
+
+| Job | Command | What it checks |
+|---|---|---|
+| **Integration Tests** | `npm run test:integration` | Full stack — auth flows, storage, API routes against real PostgreSQL |
 
 ---
 
@@ -65,37 +69,22 @@ Branch policies live in ADO — they cannot be expressed in YAML. A project admi
 |---|---|
 | Minimum reviewers | **1 required** |
 | Reset votes on new commits | **On** — prevents stale approvals |
-| Build validation | Point at this pipeline, set to **Required** |
+| Build validation | Point at this pipeline · set to **Required** |
 | Allow merge commits | **Off** |
 | Allow squash merge | **On** |
-| Allow rebase | Optional |
 | Block direct pushes to main | **On** |
 
 ---
 
-## npm Scripts
+## Variable Group: `FeatureForgeAI-Secrets`
 
-Add these to `package.json` to match what the pipeline calls:
+Secrets are stored in **ADO Library → Variable Groups** and never committed to this file.
 
-```json
-"scripts": {
-  "lint":       "eslint src/ features/ --ext .ts",
-  "lint:fix":   "eslint src/ features/ --ext .ts --fix",
-  "typecheck":  "tsc --noEmit",
-  "test:unit":  "jest --config jest.config.js"
-}
-```
-
-New dev dependencies required:
-
-```
-@typescript-eslint/eslint-plugin
-@typescript-eslint/parser
-eslint
-jest
-jest-junit
-ts-jest
-```
+| Variable | Used by | Purpose |
+|---|---|---|
+| `DATABASE_URL` | Unit Tests, Integration Tests | PostgreSQL connection string (Neon or local) |
+| `SESSION_SECRET` | Integration Tests | Signs express-session cookies in auth flow tests |
+| `OPENAI_API_KEY` | Integration Tests (optional) | Only needed if `FEATUREGEN_FAKE_AI` is not set |
 
 ---
 
@@ -105,34 +94,25 @@ ts-jest
 
 | Failure | Result |
 |---|---|
-| ESLint error | Lint job fails, PR blocked |
-| Type error (`tsc --noEmit`) | TypeCheck job fails, PR blocked |
-| Failing unit test | UnitTests job fails, PR blocked |
-| Coverage below 80% | Jest exits non-zero, PR blocked |
-
-### Process / human failures
-
-| Failure | Impact |
-|---|---|
-| No reviewer approves | PR sits open — needs team SLA to resolve |
-| Branch policy not configured by admin | Pipeline runs but nothing blocks the merge |
-| Stale approval not dismissed | New breaking commit accepted under old approval |
-| `CodeQuality` stage renamed in YAML | ADO build validation policy references old name silently — gate disappears |
+| ESLint error | Lint job fails · PR blocked |
+| Type error (`tsc --noEmit`) | TypeCheck job fails · PR blocked |
+| Failing unit test | UnitTests job fails · PR blocked |
+| Security vulnerability found | SecurityCheck job fails · PR blocked |
+| Failing integration test | Stage 2 fails · author notified post-merge |
 
 ### Infrastructure failures
 
 | Failure | Impact |
 |---|---|
 | ADO service outage | Pipelines queue until service recovers |
-| npm registry outage | `npm ci` fails — mitigated by the `--prefer-offline` cache flag |
+| npm registry outage | `npm ci` fails — mitigated by `--prefer-offline` cache flag |
 | Flaky unit test | Intermittent failures erode trust — quarantine or fix immediately |
 | Agent pool exhausted | Runs queue — consider additional agents for busy PRs |
+| PostgreSQL unreachable | Integration tests fail — Stage 2 only, does not block PRs |
 
 ---
 
 ## Notifications
-
-### Built-in ADO notifications (no config needed)
 
 - PR author is notified when checks fail or pass
 - Assigned reviewers are notified when review is requested
@@ -140,43 +120,12 @@ ts-jest
 - Watchers are notified on merge to `main`
 - Commit author is notified when a post-merge `main` check fails
 
-### Recommended additions
-
-- **Slack** — connect the ADO → Slack integration and post `main` branch failures to a `#ci-alerts` channel. A broken `main` is higher severity than a broken PR.
-- **README badge** — shows live `main` health at a glance:
-
-```markdown
-[![Build Status](https://dev.azure.com/{org}/{project}/_apis/build/status/{pipeline}?branchName=main)](https://dev.azure.com/{org}/{project}/_build/latest?definitionId={id}&branchName=main)
-```
-
 ---
 
 ## Stakeholders
-
-### Current
 
 | Role | Responsibility |
 |---|---|
 | Developers | Write code, open PRs, fix check failures |
 | Reviewers / Tech Leads | Approve PRs, catch logic issues CI cannot |
 | ADO Project Admins | Configure branch policies, manage agent pools and secrets |
-
-### As the process evolves
-
-| Scenario | Who to involve |
-|---|---|
-| Adding deployment stages | DevOps / Platform Engineering |
-| Adding E2E gates to PRs | QA Engineers — define what smoke tests are safe to run on every PR |
-| Security / compliance requirements | Security team for SAST (CodeQL), dependency scanning; Compliance for audit log retention |
-| Growing team | Engineering Manager to set review SLAs and maintain CODEOWNERS |
-| Budget / billing | Finance — ADO pipeline minutes scale with team size |
-
----
-
-## Recommended Next Steps
-
-1. **CODEOWNERS** — auto-assign reviews to the right team when specific paths change
-2. **`npm audit` step** — fail on high-severity vulnerabilities in Stage 1
-3. **Dependabot** — auto-raise PRs for dependency updates
-4. **Matrix testing** — run unit tests across Node 18, 20, and 22 if broad compatibility matters
-5. **`strict: true` in tsconfig** — ensures `tsc --noEmit` catches the broadest set of type issues; enable incrementally to clear the existing backlog first

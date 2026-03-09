@@ -5,7 +5,7 @@
 #   Runs on : every PR targeting main  +  every push/merge to main
 #   Purpose : fast feedback gate — no environment, no secrets, no browser
 #
-# Stage 2 · E2E / Integration Tests  (Vitest integration suite)
+# Stage 2 · Integration Tests  (Vitest integration suite)
 #   Runs on : weekday morning schedule  +  post-merge pushes to main
 #   Purpose : full stack validation against a real database
 # ─────────────────────────────────────────────────────────────────────────────
@@ -84,9 +84,7 @@ stages:
         displayName: 'ESLint'
         timeoutInMinutes: 15
         pool:
-          name: managed-pool-cus-001
-          demands:
-            - ImageOverride -equals windows-2025
+          vmImage: 'ubuntu-latest'
 
         steps:
           - task: NodeTool@0
@@ -102,16 +100,16 @@ stages:
               key: 'npm | "$(Agent.OS)" | package-lock.json'
               path: '$(Pipeline.Workspace)/.npm'
 
-          - powershell: |
-              Write-Host "Installing dependencies..."
-              npm ci --cache "$(Pipeline.Workspace)/.npm" `
-                     --prefer-offline `
-                     --fetch-retries=5 `
+          - script: |
+              echo "Installing dependencies..."
+              npm ci --cache "$(Pipeline.Workspace)/.npm" \
+                     --prefer-offline \
+                     --fetch-retries=5 \
                      --fetch-retry-maxtimeout=60000
             displayName: 'npm ci'
 
-          - powershell: |
-              Write-Host "Running ESLint..."
+          - script: |
+              echo "Running ESLint..."
               npm run lint
             displayName: 'Run ESLint'
 
@@ -123,9 +121,7 @@ stages:
         displayName: 'TypeScript Type Check'
         timeoutInMinutes: 15
         pool:
-          name: managed-pool-cus-001
-          demands:
-            - ImageOverride -equals windows-2025
+          vmImage: 'ubuntu-latest'
 
         steps:
           - task: NodeTool@0
@@ -139,17 +135,17 @@ stages:
               key: 'npm | "$(Agent.OS)" | package-lock.json'
               path: '$(Pipeline.Workspace)/.npm'
 
-          - powershell: |
-              Write-Host "Installing dependencies..."
-              npm ci --cache "$(Pipeline.Workspace)/.npm" `
-                     --prefer-offline `
-                     --fetch-retries=5 `
+          - script: |
+              echo "Installing dependencies..."
+              npm ci --cache "$(Pipeline.Workspace)/.npm" \
+                     --prefer-offline \
+                     --fetch-retries=5 \
                      --fetch-retry-maxtimeout=60000
             displayName: 'npm ci'
 
-          - powershell: |
-              Write-Host "Running TypeScript type check..."
-              npm run check   # Defined in package.json as: tsc --noEmit
+          - script: |
+              echo "Running TypeScript type check..."
+              npm run check
             displayName: 'tsc --noEmit'
 
       # ── JOB 3: Unit Tests (Vitest) ────────────────────────────────────────
@@ -160,9 +156,7 @@ stages:
         displayName: 'Unit Tests (Vitest)'
         timeoutInMinutes: 15
         pool:
-          name: managed-pool-cus-001
-          demands:
-            - ImageOverride -equals windows-2025
+          vmImage: 'ubuntu-latest'
 
         steps:
           - task: NodeTool@0
@@ -176,17 +170,17 @@ stages:
               key: 'npm | "$(Agent.OS)" | package-lock.json'
               path: '$(Pipeline.Workspace)/.npm'
 
-          - powershell: |
-              Write-Host "Installing dependencies..."
-              npm ci --cache "$(Pipeline.Workspace)/.npm" `
-                     --prefer-offline `
-                     --fetch-retries=5 `
+          - script: |
+              echo "Installing dependencies..."
+              npm ci --cache "$(Pipeline.Workspace)/.npm" \
+                     --prefer-offline \
+                     --fetch-retries=5 \
                      --fetch-retry-maxtimeout=60000
             displayName: 'npm ci'
 
-          - powershell: |
-              Write-Host "Running unit tests..."
-              npm run test:coverage   # Vitest with coverage report
+          - script: |
+              echo "Running unit tests..."
+              npm run test:coverage
             displayName: 'Run Unit Tests'
             env:
               CI: $(CI)
@@ -218,9 +212,7 @@ stages:
         displayName: 'Security Check'
         timeoutInMinutes: 15
         pool:
-          name: managed-pool-cus-001
-          demands:
-            - ImageOverride -equals windows-2025
+          vmImage: 'ubuntu-latest'
 
         steps:
           - task: NodeTool@0
@@ -234,17 +226,17 @@ stages:
               key: 'npm | "$(Agent.OS)" | package-lock.json'
               path: '$(Pipeline.Workspace)/.npm'
 
-          - powershell: |
-              Write-Host "Installing dependencies..."
-              npm ci --cache "$(Pipeline.Workspace)/.npm" `
-                     --prefer-offline `
-                     --fetch-retries=5 `
+          - script: |
+              echo "Installing dependencies..."
+              npm ci --cache "$(Pipeline.Workspace)/.npm" \
+                     --prefer-offline \
+                     --fetch-retries=5 \
                      --fetch-retry-maxtimeout=60000
             displayName: 'npm ci'
 
-          - powershell: |
-              Write-Host "Running security check..."
-              npm run security-check   # Runs scripts/security-check.mjs
+          - script: |
+              echo "Running security check..."
+              npm run security-check
             displayName: 'Run Security Check'
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -270,9 +262,7 @@ stages:
         displayName: 'Integration Tests'
         timeoutInMinutes: 30
         pool:
-          name: managed-pool-cus-001
-          demands:
-            - ImageOverride -equals windows-2025
+          vmImage: 'ubuntu-latest'
 
         steps:
           - task: NodeTool@0
@@ -286,26 +276,23 @@ stages:
               key: 'npm | "$(Agent.OS)" | package-lock.json'
               path: '$(Pipeline.Workspace)/.npm'
 
-          - powershell: |
-              Write-Host "Installing dependencies..."
-              npm ci --cache "$(Pipeline.Workspace)/.npm" `
-                     --prefer-offline `
-                     --fetch-retries=5 `
+          - script: |
+              echo "Installing dependencies..."
+              npm ci --cache "$(Pipeline.Workspace)/.npm" \
+                     --prefer-offline \
+                     --fetch-retries=5 \
                      --fetch-retry-maxtimeout=60000
             displayName: 'npm ci'
 
-          - powershell: |
-              Write-Host "Running integration tests..."
+          - script: |
+              echo "Running integration tests..."
               npm run test:integration
             displayName: 'Run Integration Tests'
             env:
               CI: $(CI)
-              # Real database connection required for integration tests
-              DATABASE_URL: $(DATABASE_URL)
-              # SESSION_SECRET needed for auth flow tests
-              SESSION_SECRET: $(SESSION_SECRET)
-              # Fake AI keeps tests deterministic even in integration suite
-              FEATUREGEN_FAKE_AI: $(FEATUREGEN_FAKE_AI)
+              DATABASE_URL: $(DATABASE_URL)               # Real DB connection required
+              SESSION_SECRET: $(SESSION_SECRET)           # Needed for auth flow tests
+              FEATUREGEN_FAKE_AI: $(FEATUREGEN_FAKE_AI)   # Keep tests deterministic
 
           - task: PublishTestResults@2
             displayName: 'Publish Integration Test Results'
