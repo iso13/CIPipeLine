@@ -1,0 +1,317 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# FeatureForgeAI — CI Pipeline
+#
+# Stage 1 · Code Quality  (ESLint · tsc · Unit Tests · Security)
+#   Runs on : every PR targeting main  +  every push/merge to main
+#   Purpose : fast feedback gate — no environment, no secrets, no browser
+#
+# Stage 2 · E2E / Integration Tests  (Vitest integration suite)
+#   Runs on : weekday morning schedule  +  post-merge pushes to main
+#   Purpose : full stack validation against a real database
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Trigger Stage 1 on every push/merge to main
+trigger:
+  branches:
+    include:
+      - main
+
+# Trigger Stage 1 on every pull request targeting main.
+# Markdown and report files are excluded — no code changed, no need to run.
+pr:
+  branches:
+    include:
+      - main
+  paths:
+    exclude:
+      - '**/*.md'
+      - 'reports/**'
+
+# Trigger Stage 2 on a weekday morning schedule.
+# 'always: true' runs even when there are no new commits.
+schedules:
+  - cron: '0 11 * * 1-5'       # 6:00 AM CDT / 5:00 AM CST Mon-Fri
+    displayName: 'Weekday Morning Run'
+    branches:
+      include:
+        - main
+    always: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SHARED VARIABLES
+# ─────────────────────────────────────────────────────────────────────────────
+variables:
+  # Secrets (DATABASE_URL, OPENAI_API_KEY, SESSION_SECRET) are stored
+  # securely in the ADO variable group — never committed to this file.
+  - group: FeatureForgeAI-Secrets
+
+  - name: NODE_VERSION
+    value: '20.x'               # Matches local dev environment
+
+  - name: CI
+    value: 'true'               # Signals to Vitest to use non-interactive output
+
+  # Skip real OpenAI API calls during CI — returns deterministic stub responses.
+  # Keeps tests fast, free, and reliable without a live API key.
+  - name: FEATUREGEN_FAKE_AI
+    value: '1'
+
+  - name: NODE_OPTIONS
+    value: '--max-old-space-size=4096'   # Prevent OOM on large test suites
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 1 — CODE QUALITY
+# All four jobs run in PARALLEL for the fastest possible feedback.
+# Every job must pass before a PR can be merged (ADO Branch Policy).
+# ─────────────────────────────────────────────────────────────────────────────
+stages:
+
+  - stage: CodeQuality
+    displayName: 'Code Quality Checks'
+    # Run on PR builds and direct pushes to main — skip scheduled runs
+    condition: |
+      or(
+        eq(variables['Build.Reason'], 'PullRequest'),
+        eq(variables['Build.Reason'], 'IndividualCI'),
+        eq(variables['Build.Reason'], 'BatchedCI')
+      )
+    jobs:
+
+      # ── JOB 1: ESLint ────────────────────────────────────────────────────
+      # Lints all TypeScript source files across client/ and server/.
+      # Any ESLint error fails this job and blocks the PR.
+      - job: Lint
+        displayName: 'ESLint'
+        timeoutInMinutes: 15
+        pool:
+          name: managed-pool-cus-001
+          demands:
+            - ImageOverride -equals windows-2025
+
+        steps:
+          - task: NodeTool@0
+            displayName: 'Use Node $(NODE_VERSION)'
+            inputs:
+              versionSpec: '$(NODE_VERSION)'
+
+          # Cache node_modules using package-lock.json as the key.
+          # On a cache hit, npm ci skips the network entirely.
+          - task: Cache@2
+            displayName: 'Cache npm'
+            inputs:
+              key: 'npm | "$(Agent.OS)" | package-lock.json'
+              path: '$(Pipeline.Workspace)/.npm'
+
+          - powershell: |
+              Write-Host "Installing dependencies..."
+              npm ci --cache "$(Pipeline.Workspace)/.npm" `
+                     --prefer-offline `
+                     --fetch-retries=5 `
+                     --fetch-retry-maxtimeout=60000
+            displayName: 'npm ci'
+
+          - powershell: |
+              Write-Host "Running ESLint..."
+              npm run lint
+            displayName: 'Run ESLint'
+
+      # ── JOB 2: TypeScript Type Check ─────────────────────────────────────
+      # Runs the TypeScript compiler in check-only mode — no output files written.
+      # Validates both client/ and server/ since they share types via @shared.
+      # Catches type errors ESLint cannot: broken imports, wrong arg types, etc.
+      - job: TypeCheck
+        displayName: 'TypeScript Type Check'
+        timeoutInMinutes: 15
+        pool:
+          name: managed-pool-cus-001
+          demands:
+            - ImageOverride -equals windows-2025
+
+        steps:
+          - task: NodeTool@0
+            displayName: 'Use Node $(NODE_VERSION)'
+            inputs:
+              versionSpec: '$(NODE_VERSION)'
+
+          - task: Cache@2
+            displayName: 'Cache npm'
+            inputs:
+              key: 'npm | "$(Agent.OS)" | package-lock.json'
+              path: '$(Pipeline.Workspace)/.npm'
+
+          - powershell: |
+              Write-Host "Installing dependencies..."
+              npm ci --cache "$(Pipeline.Workspace)/.npm" `
+                     --prefer-offline `
+                     --fetch-retries=5 `
+                     --fetch-retry-maxtimeout=60000
+            displayName: 'npm ci'
+
+          - powershell: |
+              Write-Host "Running TypeScript type check..."
+              npm run check   # Defined in package.json as: tsc --noEmit
+            displayName: 'tsc --noEmit'
+
+      # ── JOB 3: Unit Tests (Vitest) ────────────────────────────────────────
+      # Runs unit tests in tests/utils/ and tests/server/.
+      # FEATUREGEN_FAKE_AI=1 prevents real OpenAI API calls — returns stubs.
+      # Coverage is published to the ADO Coverage tab via Cobertura.
+      - job: UnitTests
+        displayName: 'Unit Tests (Vitest)'
+        timeoutInMinutes: 15
+        pool:
+          name: managed-pool-cus-001
+          demands:
+            - ImageOverride -equals windows-2025
+
+        steps:
+          - task: NodeTool@0
+            displayName: 'Use Node $(NODE_VERSION)'
+            inputs:
+              versionSpec: '$(NODE_VERSION)'
+
+          - task: Cache@2
+            displayName: 'Cache npm'
+            inputs:
+              key: 'npm | "$(Agent.OS)" | package-lock.json'
+              path: '$(Pipeline.Workspace)/.npm'
+
+          - powershell: |
+              Write-Host "Installing dependencies..."
+              npm ci --cache "$(Pipeline.Workspace)/.npm" `
+                     --prefer-offline `
+                     --fetch-retries=5 `
+                     --fetch-retry-maxtimeout=60000
+            displayName: 'npm ci'
+
+          - powershell: |
+              Write-Host "Running unit tests..."
+              npm run test:coverage   # Vitest with coverage report
+            displayName: 'Run Unit Tests'
+            env:
+              CI: $(CI)
+              FEATUREGEN_FAKE_AI: $(FEATUREGEN_FAKE_AI)   # Skip real OpenAI calls
+              DATABASE_URL: $(DATABASE_URL)                # Test DB from variable group
+
+          # Publish JUnit results to the ADO Tests tab
+          - task: PublishTestResults@2
+            displayName: 'Publish Test Results'
+            condition: always()
+            inputs:
+              testResultsFormat: 'JUnit'
+              testResultsFiles: '**/test-results.xml'
+              failTaskOnFailedTests: true
+              testRunTitle: 'Unit Tests - $(Build.SourceBranchName)'
+
+          # Publish Cobertura coverage to the ADO Coverage tab
+          - task: PublishCodeCoverageResults@1
+            displayName: 'Publish Coverage Report'
+            condition: always()
+            inputs:
+              codeCoverageTool: 'Cobertura'
+              summaryFileLocation: '**/coverage/cobertura-coverage.xml'
+
+      # ── JOB 4: Security Check ─────────────────────────────────────────────
+      # Runs scripts/security-check.mjs to scan for vulnerabilities.
+      # Catches dependency issues and insecure patterns early — before merge.
+      - job: SecurityCheck
+        displayName: 'Security Check'
+        timeoutInMinutes: 15
+        pool:
+          name: managed-pool-cus-001
+          demands:
+            - ImageOverride -equals windows-2025
+
+        steps:
+          - task: NodeTool@0
+            displayName: 'Use Node $(NODE_VERSION)'
+            inputs:
+              versionSpec: '$(NODE_VERSION)'
+
+          - task: Cache@2
+            displayName: 'Cache npm'
+            inputs:
+              key: 'npm | "$(Agent.OS)" | package-lock.json'
+              path: '$(Pipeline.Workspace)/.npm'
+
+          - powershell: |
+              Write-Host "Installing dependencies..."
+              npm ci --cache "$(Pipeline.Workspace)/.npm" `
+                     --prefer-offline `
+                     --fetch-retries=5 `
+                     --fetch-retry-maxtimeout=60000
+            displayName: 'npm ci'
+
+          - powershell: |
+              Write-Host "Running security check..."
+              npm run security-check   # Runs scripts/security-check.mjs
+            displayName: 'Run Security Check'
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 2 — INTEGRATION TESTS
+# Runs against a real PostgreSQL database (Neon or local).
+# Skipped on PR builds — Stage 1 is the PR gate. This runs post-merge
+# and on the weekday schedule to validate the full stack.
+# ─────────────────────────────────────────────────────────────────────────────
+
+  - stage: IntegrationTests
+    displayName: 'Integration Tests (Vitest)'
+    dependsOn: CodeQuality
+    # Skip on PRs — runs post-merge and on schedule only.
+    # Accept 'Skipped' from CodeQuality since scheduled runs bypass Stage 1.
+    condition: |
+      and(
+        ne(variables['Build.Reason'], 'PullRequest'),
+        in(dependencies.CodeQuality.result, 'Succeeded', 'Skipped')
+      )
+
+    jobs:
+      - job: IntegrationTests
+        displayName: 'Integration Tests'
+        timeoutInMinutes: 30
+        pool:
+          name: managed-pool-cus-001
+          demands:
+            - ImageOverride -equals windows-2025
+
+        steps:
+          - task: NodeTool@0
+            displayName: 'Use Node $(NODE_VERSION)'
+            inputs:
+              versionSpec: '$(NODE_VERSION)'
+
+          - task: Cache@2
+            displayName: 'Cache npm'
+            inputs:
+              key: 'npm | "$(Agent.OS)" | package-lock.json'
+              path: '$(Pipeline.Workspace)/.npm'
+
+          - powershell: |
+              Write-Host "Installing dependencies..."
+              npm ci --cache "$(Pipeline.Workspace)/.npm" `
+                     --prefer-offline `
+                     --fetch-retries=5 `
+                     --fetch-retry-maxtimeout=60000
+            displayName: 'npm ci'
+
+          - powershell: |
+              Write-Host "Running integration tests..."
+              npm run test:integration
+            displayName: 'Run Integration Tests'
+            env:
+              CI: $(CI)
+              # Real database connection required for integration tests
+              DATABASE_URL: $(DATABASE_URL)
+              # SESSION_SECRET needed for auth flow tests
+              SESSION_SECRET: $(SESSION_SECRET)
+              # Fake AI keeps tests deterministic even in integration suite
+              FEATUREGEN_FAKE_AI: $(FEATUREGEN_FAKE_AI)
+
+          - task: PublishTestResults@2
+            displayName: 'Publish Integration Test Results'
+            condition: always()
+            inputs:
+              testResultsFormat: 'JUnit'
+              testResultsFiles: '**/test-results.xml'
+              failTaskOnFailedTests: false   # Don't double-fail — already surfaced above
+              testRunTitle: 'Integration Tests - $(Build.SourceBranchName)'
