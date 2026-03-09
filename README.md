@@ -1,4 +1,4 @@
-# FeatureForgeAI — CI Pipeline
+# FeatureGenAI — CI Pipeline
 
 **Stack:** Azure DevOps · TypeScript · Node.js 20 · Vitest · ESLint · PostgreSQL
 
@@ -6,7 +6,7 @@
 
 ## Overview
 
-FeatureForgeAI is an AI-powered BDD feature generation platform that transforms user stories into structured Cucumber features and scenarios using OpenAI and domain-specific knowledge.
+FeatureGenAI is an AI-powered BDD feature generation platform that transforms user stories into structured Cucumber features and scenarios using OpenAI and domain-specific knowledge.
 
 This pipeline enforces code quality on every pull request and every push to `main`, then runs the full integration suite on a weekday schedule. No code reaches `main` without passing all automated checks and a human review.
 
@@ -76,7 +76,7 @@ Branch policies live in ADO — they cannot be expressed in YAML. A project admi
 
 ---
 
-## Variable Group: `FeatureForgeAI-Secrets`
+## Variable Group: `FeatureGenAI-Secrets`
 
 Secrets are stored in **ADO Library → Variable Groups** and never committed to this file.
 
